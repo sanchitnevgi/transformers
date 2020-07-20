@@ -20,7 +20,7 @@ mkdir -p $OUTPUT_DIR
 # Add parent directory to python path to access lightning_base.py
 export PYTHONPATH="../":"${PYTHONPATH}"
 
-python3 run_pl_glue.py --data_dir $DATA_DIR \
+CUDA_VISIBLE_DEVICES=0 python3 run_pl_glue.py --data_dir $DATA_DIR \
 --task $TASK \
 --model_name_or_path $BERT_MODEL \
 --output_dir $OUTPUT_DIR \
@@ -29,5 +29,6 @@ python3 run_pl_glue.py --data_dir $DATA_DIR \
 --num_train_epochs $NUM_EPOCHS \
 --train_batch_size $BATCH_SIZE \
 --seed $SEED \
+--gpus 1 \
 --do_train \
 --do_predict
