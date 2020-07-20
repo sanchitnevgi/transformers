@@ -8,13 +8,14 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from lightning_base import BaseTransformer, add_generic_args, generic_train
 from transformers import glue_compute_metrics as compute_metrics
 from transformers import glue_convert_examples_to_features as convert_examples_to_features
 from transformers import glue_output_modes
 from transformers import glue_processors as processors
 from transformers import glue_tasks_num_labels
 
+from pytorch_lightning.loggers import WandbLogger
+from lightning_base import BaseTransformer, add_generic_args, generic_train
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class GLUETransformer(BaseTransformer):
         num_labels = glue_tasks_num_labels[hparams.task]
 
         super().__init__(hparams, num_labels, self.mode)
+
+        self.save_hyperparameters()
 
     def forward(self, **inputs):
         return self.model(**inputs)
@@ -72,7 +75,7 @@ class GLUETransformer(BaseTransformer):
                 logger.info("Saving features into cached file %s", cached_features_file)
                 torch.save(features, cached_features_file)
 
-    def load_dataset(self, mode, batch_size):
+    def get_dataloader(self, mode, batch_size):
         "Load datasets. Called after prepare data."
 
         # We test on dev set to compare to benchmarks without having to submit to GLUE server
@@ -179,11 +182,11 @@ if __name__ == "__main__":
         args.output_dir = os.path.join("./results", f"{args.task}_{time.strftime('%Y%m%d_%H%M%S')}",)
         os.makedirs(args.output_dir)
 
+    wandb_logger = WandbLogger(project="transformers")
+
     model = GLUETransformer(args)
-    trainer = generic_train(model, args)
+    trainer = generic_train(model, args, logger=wandb_logger)
 
     # Optionally, predict on dev set and write to output_dir
     if args.do_predict:
-        checkpoints = list(sorted(glob.glob(os.path.join(args.output_dir, "checkpointepoch=*.ckpt"), recursive=True)))
-        model = model.load_from_checkpoint(checkpoints[-1])
-        trainer.test(model)
+        trainer.test()

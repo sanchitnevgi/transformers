@@ -111,6 +111,9 @@ class BaseTransformer(pl.LightningModule):
         scheduler = get_linear_schedule_with_warmup(
             self.opt, num_warmup_steps=self.hparams.warmup_steps, num_training_steps=self.total_steps
         )
+
+        self.lr_scheduler = scheduler
+
         scheduler = {"scheduler": scheduler, "interval": "step", "frequency": 1}
         return [optimizer], [scheduler]
 
@@ -194,7 +197,7 @@ class BaseTransformer(pl.LightningModule):
 
 class LoggingCallback(pl.Callback):
     def on_batch_end(self, trainer, pl_module):
-        lrs = {f"lr_group_{i}": lr for i, lr in enumerate(self.lr_scheduler.get_lr())}
+        lrs = {f"lr_group_{i}": lr for i, lr in enumerate(pl_module.lr_scheduler.get_lr())}
         pl_module.logger.log_metrics(lrs)
 
     def on_validation_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
@@ -240,7 +243,7 @@ def add_generic_args(parser, root_dir) -> None:
         help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
         "See details at https://nvidia.github.io/apex/amp.html",
     )
-    parser.add_argument("--n_tpu_cores", dest="tpu_cores", type=int, default=0)
+
     parser.add_argument("--max_grad_norm", dest="gradient_clip_val", default=1.0, type=float, help="Max gradient norm")
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument("--do_predict", action="store_true", help="Whether to run predictions on the test set.")
@@ -254,12 +257,13 @@ def add_generic_args(parser, root_dir) -> None:
 
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
 
+    parser.add_argument("--gpus", type=int, default=0, help="Number of GPUs used for training")
 
 def generic_train(
     model: BaseTransformer,
     args: argparse.Namespace,
     early_stopping_callback=False,
-    logger=True,  # can pass WandbLogger() here
+    logger=True,
     extra_callbacks=[],
     checkpoint_callback=None,
     logging_callback=None,
