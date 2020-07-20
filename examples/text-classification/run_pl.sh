@@ -26,7 +26,7 @@ CUDA_VISIBLE_DEVICES=0 python3 run_pl_glue.py --data_dir $DATA_DIR \
 --output_dir $OUTPUT_DIR \
 --max_seq_length  $MAX_LENGTH \
 --learning_rate $LEARNING_RATE \
---num_train_epochs $NUM_EPOCHS \
+--max_epochs $NUM_EPOCHS \
 --train_batch_size $BATCH_SIZE \
 --seed $SEED \
 --gpus 1 \

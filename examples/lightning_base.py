@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pytorch_lightning as pl
+from pytorch_lightning import seed_everything, LightningModule, Trainer, Callback
 from pytorch_lightning.utilities import rank_zero_info
 
 from transformers import (
@@ -39,7 +40,7 @@ MODEL_MODES = {
 }
 
 
-class BaseTransformer(pl.LightningModule):
+class BaseTransformer(LightningModule):
     def __init__(
         self,
         hparams: argparse.Namespace,
@@ -127,6 +128,7 @@ class BaseTransformer(pl.LightningModule):
         train_batch_size = self.hparams.train_batch_size
         dataloader = self.get_dataloader("train", train_batch_size)
         self.train_loader = dataloader
+
         self.total_steps = (
             (len(dataloader.dataset) // (train_batch_size * max(1, self.hparams.gpus)))
             // self.hparams.accumulate_grad_batches
@@ -162,7 +164,7 @@ class BaseTransformer(pl.LightningModule):
         self.tfmr_ckpts[self.step_count] = save_path
 
     @staticmethod
-    def add_model_specific_args(parser, root_dir):
+    def add_model_specific_args(parser):
         parser.add_argument(
             "--model_name_or_path",
             default=None,
@@ -189,18 +191,17 @@ class BaseTransformer(pl.LightningModule):
         parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
         parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
         parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
-        parser.add_argument("--num_workers", default=4, type=int, help="kwarg passed to DataLoader")
-        parser.add_argument("--num_train_epochs", dest="max_epochs", default=3, type=int)
+
         parser.add_argument("--train_batch_size", default=32, type=int)
         parser.add_argument("--eval_batch_size", default=32, type=int)
 
 
-class LoggingCallback(pl.Callback):
+class LoggingCallback(Callback):
     def on_batch_end(self, trainer, pl_module):
-        lrs = {f"lr_group_{i}": lr for i, lr in enumerate(pl_module.lr_scheduler.get_lr())}
+        lrs = {f"lr_group_{i}": lr for i, lr in enumerate(pl_module.lr_scheduler.get_last_lr())}
         pl_module.logger.log_metrics(lrs)
 
-    def on_validation_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+    def on_validation_end(self, trainer: Trainer, pl_module: LightningModule):
         rank_zero_info("***** Validation results *****")
         metrics = trainer.callback_metrics
         # Log results
@@ -208,7 +209,7 @@ class LoggingCallback(pl.Callback):
             if key not in ["log", "progress_bar"]:
                 rank_zero_info("{} = {}\n".format(key, str(metrics[key])))
 
-    def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+    def on_test_end(self, trainer: Trainer, pl_module: LightningModule):
         rank_zero_info("***** Test results *****")
         metrics = trainer.callback_metrics
         # Log and save results to file
@@ -220,8 +221,7 @@ class LoggingCallback(pl.Callback):
                     writer.write("{} = {}\n".format(key, str(metrics[key])))
 
 
-def add_generic_args(parser, root_dir) -> None:
-    #  TODO(SS): allow all pl args? parser = pl.Trainer.add_argparse_args(parser)
+def add_program_args(parser) -> None:
     parser.add_argument(
         "--output_dir",
         default=None,
@@ -230,34 +230,12 @@ def add_generic_args(parser, root_dir) -> None:
         help="The output directory where the model predictions and checkpoints will be written.",
     )
 
-    parser.add_argument(
-        "--fp16",
-        action="store_true",
-        help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
-    )
-
-    parser.add_argument(
-        "--fp16_opt_level",
-        type=str,
-        default="O2",
-        help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
-        "See details at https://nvidia.github.io/apex/amp.html",
-    )
-
-    parser.add_argument("--max_grad_norm", dest="gradient_clip_val", default=1.0, type=float, help="Max gradient norm")
     parser.add_argument("--do_train", action="store_true", help="Whether to run training.")
     parser.add_argument("--do_predict", action="store_true", help="Whether to run predictions on the test set.")
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        dest="accumulate_grad_batches",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
 
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
 
-    parser.add_argument("--gpus", type=int, default=0, help="Number of GPUs used for training")
+    return parser
 
 def generic_train(
     model: BaseTransformer,
@@ -266,10 +244,9 @@ def generic_train(
     logger=True,
     extra_callbacks=[],
     checkpoint_callback=None,
-    logging_callback=None,
-    **extra_train_kwargs
+    logging_callback=None
 ):
-    pl.seed_everything(args.seed)
+    seed_everything(args.seed)
 
     # init model
     odir = Path(model.hparams.output_dir)
@@ -280,30 +257,23 @@ def generic_train(
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
             filepath=args.output_dir, prefix="checkpoint", monitor="val_loss", mode="min", save_top_k=1
         )
+
     if logging_callback is None:
         logging_callback = LoggingCallback()
 
-    train_params = {}
-
-    # TODO: remove with PyTorch 1.6 since pl uses native amp
-    if args.fp16:
-        train_params["precision"] = 16
-        train_params["amp_level"] = args.fp16_opt_level
-
-    if args.gpus > 1:
-        train_params["distributed_backend"] = "ddp"
-
-    trainer = pl.Trainer.from_argparse_args(
+    trainer = Trainer.from_argparse_args(
         args,
         weights_summary=None,
         callbacks=[logging_callback] + extra_callbacks,
         logger=logger,
         checkpoint_callback=checkpoint_callback,
-        early_stop_callback=early_stopping_callback,
-        **train_params,
+        early_stop_callback=early_stopping_callback
     )
 
     if args.do_train:
         trainer.fit(model)
+
+    if args.do_predict:
+        trainer.test()
 
     return trainer

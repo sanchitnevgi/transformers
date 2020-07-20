@@ -14,8 +14,9 @@ from transformers import glue_output_modes
 from transformers import glue_processors as processors
 from transformers import glue_tasks_num_labels
 
+from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
-from lightning_base import BaseTransformer, add_generic_args, generic_train
+from lightning_base import BaseTransformer, add_program_args, generic_train
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,6 @@ class GLUETransformer(BaseTransformer):
         num_labels = glue_tasks_num_labels[hparams.task]
 
         super().__init__(hparams, num_labels, self.mode)
-
-        self.save_hyperparameters()
 
     def forward(self, **inputs):
         return self.model(**inputs)
@@ -76,17 +75,17 @@ class GLUETransformer(BaseTransformer):
                 torch.save(features, cached_features_file)
 
     def get_dataloader(self, mode, batch_size):
-        "Load datasets. Called after prepare data."
-
         # We test on dev set to compare to benchmarks without having to submit to GLUE server
         mode = "dev" if mode == "test" else mode
 
         cached_features_file = self._feature_file(mode)
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
+        
         all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
         all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
         all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
+        
         if self.hparams.glue_output_mode == "classification":
             all_labels = torch.tensor([f.label for f in features], dtype=torch.long)
         elif self.hparams.glue_output_mode == "regression":
@@ -95,7 +94,8 @@ class GLUETransformer(BaseTransformer):
         return DataLoader(
             TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels),
             batch_size=batch_size,
-            shuffle=True,
+            shuffle= (mode == "train"),
+            num_workers=4
         )
 
     def validation_step(self, batch, batch_idx):
@@ -142,8 +142,9 @@ class GLUETransformer(BaseTransformer):
         return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     @staticmethod
-    def add_model_specific_args(parser, root_dir):
-        BaseTransformer.add_model_specific_args(parser, root_dir)
+    def add_model_specific_args(parser):
+        BaseTransformer.add_model_specific_args(parser)
+
         parser.add_argument(
             "--max_seq_length",
             default=128,
@@ -173,8 +174,11 @@ class GLUETransformer(BaseTransformer):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    add_generic_args(parser, os.getcwd())
-    parser = GLUETransformer.add_model_specific_args(parser, os.getcwd())
+
+    parser = add_program_args(parser)
+    parser = GLUETransformer.add_model_specific_args(parser)
+    parser = Trainer.add_argparse_args(parser)
+
     args = parser.parse_args()
 
     # If output_dir not provided, a folder will be generated in pwd
@@ -185,8 +189,5 @@ if __name__ == "__main__":
     wandb_logger = WandbLogger(project="transformers")
 
     model = GLUETransformer(args)
-    trainer = generic_train(model, args, logger=wandb_logger)
 
-    # Optionally, predict on dev set and write to output_dir
-    if args.do_predict:
-        trainer.test()
+    generic_train(model, args, logger=wandb_logger)
