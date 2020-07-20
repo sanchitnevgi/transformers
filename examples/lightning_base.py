@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything, LightningModule, Trainer, Callback
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.utilities import rank_zero_info
 
 from transformers import (
@@ -240,7 +241,7 @@ def add_program_args(parser) -> None:
 def generic_train(
     model: BaseTransformer,
     args: argparse.Namespace,
-    early_stopping_callback=False,
+    early_stop_callback=False,
     logger=True,
     extra_callbacks=[],
     checkpoint_callback=None,
@@ -254,7 +255,7 @@ def generic_train(
 
     # add custom checkpoints
     if checkpoint_callback is None:
-        checkpoint_callback = pl.callbacks.ModelCheckpoint(
+        checkpoint_callback = ModelCheckpoint(
             filepath=args.output_dir, prefix="checkpoint", monitor="val_loss", mode="min", save_top_k=1
         )
 
@@ -267,7 +268,7 @@ def generic_train(
         callbacks=[logging_callback] + extra_callbacks,
         logger=logger,
         checkpoint_callback=checkpoint_callback,
-        early_stop_callback=early_stopping_callback
+        early_stop_callback=early_stop_callback
     )
 
     if args.do_train:

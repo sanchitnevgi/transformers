@@ -16,6 +16,8 @@ from transformers import glue_tasks_num_labels
 
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import EarlyStopping
+
 from lightning_base import BaseTransformer, add_program_args, generic_train
 
 logger = logging.getLogger(__name__)
@@ -112,7 +114,7 @@ class GLUETransformer(BaseTransformer):
         return {"val_loss": tmp_eval_loss.detach().cpu(), "pred": preds, "target": out_label_ids}
 
     def _eval_end(self, outputs) -> tuple:
-        val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu().item()
+        val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
         preds = np.concatenate([x["pred"] for x in outputs], axis=0)
 
         if self.hparams.glue_output_mode == "classification":
@@ -138,7 +140,7 @@ class GLUETransformer(BaseTransformer):
     def test_epoch_end(self, outputs) -> dict:
         ret, predictions, targets = self._eval_end(outputs)
         logs = ret["log"]
-        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
+
         return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     @staticmethod
@@ -187,7 +189,8 @@ if __name__ == "__main__":
         os.makedirs(args.output_dir)
 
     wandb_logger = WandbLogger(project="transformers")
+    early_stopping = EarlyStopping(monitor='val_loss', patience=3)
 
     model = GLUETransformer(args)
 
-    generic_train(model, args, logger=wandb_logger)
+    generic_train(model, args, logger=wandb_logger, early_stop_callback=early_stopping)
